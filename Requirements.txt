@@ -1,0 +1,11 @@
+
+langchain
+#ollections
+pandas 
+fastapi
+uvicorn
+numpy
+scipy
+websockets
+pydantic
+python-multipart
