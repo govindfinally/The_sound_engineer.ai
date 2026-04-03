@@ -1,0 +1,14 @@
+Microsoft Windows [Version 10.0.22621.4317]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Users\USER>ngrok config add-authtoken ngrok config add-authtoken 3BpedWjiGJwzs144DgT5qOIzV0Q_2YcA5qZ4KwTYjrxbUFtMj
+ERROR:  accepts 1 arg(s), received 4
+
+C:\Users\USER>ngrok config add-authtoken 3BpedWjiGJwzs144DgT5qOIzV0Q_2YcA5qZ4KwTYjrxbUFtMj
+Authtoken saved to configuration file: C:\Users\USER\AppData\Local/ngrok/ngrok.yml
+
+C:\Users\USER>
+
+
+######################################## 
+ngrok http 8000
