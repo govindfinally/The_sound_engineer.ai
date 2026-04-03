@@ -151,6 +151,7 @@ class SessionManager:
             return {}
         session = self.sessions[session_id]
         nodes   = list(session["nodes"].values())
+        
         feedback = session["feedback_detector"].get_session_summary(nodes)
         members  = [node.get_recommendation() for node in nodes]
         return {
@@ -188,6 +189,8 @@ if __name__ == "__main__":
     sm.add_node(sid, "Bob",   "bass_guitar",          "phone456", "right")
 
     nodes = sm.get_all_nodes(sid)
+    print(f"\nAll nodes in session: {len(nodes)},{nodes}")
+    sm.get_all_recommendations(sid)  
     print(f"Members: {[n.name for n in nodes]}")
 
     # Fix #4 test — end session cleans up code

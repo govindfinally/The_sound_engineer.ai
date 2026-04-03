@@ -43,13 +43,13 @@ class FeedbackDetector:
     """
 
     def __init__(self, threshold: float = GROWTH_THRESHOLD_WARNING,
-                 window_frames: int = 3):
+                window_frames: int = 3):
         """
         Args:
             threshold:     dB/frame growth rate that triggers a warning alert.
-                           From Springer 2025: 1.5 dB/frame gives ~200ms warning.
+                        From Springer 2025: 1.5 dB/frame gives ~200ms warning.
             window_frames: How many frames to compare for growth calculation.
-                           3 frames × 93ms = 280ms lookback window.
+                        3 frames × 93ms = 280ms lookback window.
         """
         self.threshold     = threshold
         self.window_frames = window_frames
