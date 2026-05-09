@@ -9,3 +9,5 @@ scipy
 websockets
 pydantic
 python-multipart
+numpy
+scipy
