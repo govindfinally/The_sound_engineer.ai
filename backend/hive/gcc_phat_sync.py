@@ -28,7 +28,12 @@ class GCCPHATSync:
         distance_meters = delay_seconds * 343 
         correlation_peak = np.max(np.abs(corr))
         confidence =correlation_peak
-        return {delay_samples, delay_seconds, distance_meters, confidence}  
+        return {
+        "delay_samples":  delay_samples,
+        "delay_seconds":  delay_seconds,
+        "distance_meters": distance_meters,
+        "confidence":     confidence
+} 
         
         
     def sync_all_nodes(self, nodes: list) -> dict:
@@ -46,10 +51,20 @@ class GCCPHATSync:
     
         
     def get_delay_matrix(self, nodes: list) -> np.ndarray:
-        # N×N matrix of delays — used by beamformer
         phone_ids = [node.phoneID for node in nodes]
         N = len(phone_ids)
         delay_matrix = np.zeros((N, N))
+        
+        # ✅ Yeh add kar
+        delays = self.sync_all_nodes(nodes)
+        id_to_idx = {pid: i for i, pid in enumerate(phone_ids)}
+        
+        for (p1, p2), info in delays.items():
+            i = id_to_idx[p1]
+            j = id_to_idx[p2]
+            delay_matrix[i][j] =  info["delay_samples"]
+            delay_matrix[j][i] = -info["delay_samples"]  # antisymmetric
+    
         return delay_matrix
 if __name__ == "__main__":
     # Example usage

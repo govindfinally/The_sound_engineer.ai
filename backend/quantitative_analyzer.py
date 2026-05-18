@@ -6,66 +6,176 @@ import sys
 import numpy as np
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from quantitative_analyzer import compute_fft
 
-class GCCPHATSync:
-    def __init__(self, sample_rate=44100):
-        self.sample_rate= sample_rate
-        self.pcm_bytes = {} # phoneID → PCM bytes buffer
-        
-    def compute_delay(self, fft1, fft2) -> dict:
-        # Returns: {delay_samples, delay_seconds, distance_m, confidence}
-        x1= fft1
-        x2= fft2
-        R = x1 * np.conj(x2) # Cross-power spectrum
-        R_phat = R / (np.abs(R) + 1e-10) # GCC-PHAT
-        corr = np.fft.irfft(R_phat)
-        delay_samples = np.argmax(np.abs(corr)) # find peak
-        N=len(corr)
-        if delay_samples> N//2:
-            delay_samples -= N # handle wrap-around
-        delay_seconds = delay_samples/self.sample_rate
-        distance_meters = delay_seconds * 343 
-        correlation_peak = np.max(np.abs(corr))
-        confidence =correlation_peak
-        return {delay_samples, delay_seconds, distance_meters, confidence}  
-        
-        
-    def sync_all_nodes(self, nodes: list) -> dict:
-        # Computes delay between every pair of nodes
-        # Returns: {(phone1_id, phone2_id): delay_dict}\
-        phone_ids = [node.phoneID for node in nodes]
-        delays = {}
-        for phone1, phone2 in combinations(phone_ids, 2):
-            fft1 = compute_fft(self.pcm_bytes[phone1])
-            fft2 = compute_fft(self.pcm_bytes[phone2])
-            delay_info = self.compute_delay(fft1, fft2)
-            delays[(phone1, phone2)] = delay_info
-        return delays
-        
-    
-        
-    def get_delay_matrix(self, nodes: list) -> np.ndarray:
-        # N×N matrix of delays — used by beamformer
-        phone_ids = [node.phoneID for node in nodes]
-        N = len(phone_ids)
-        delay_matrix = np.zeros((N, N))
-        return delay_matrix
-if __name__ == "__main__":
-    # Example usage
-    sync = GCCPHATSync(sample_rate=44100)
-    # Simulate two audio buffers (sine waves with a delay)
-    fs = 44100
-    t = np.linspace(0, 1, fs)
-    signal1 = np.sin(2 * np.pi * 440 * t) # A4 note
-    delay_samples = 1000 # ~22.7ms delay
-    signal2 = np.concatenate((np.zeros(delay_samples), signal1[:-delay_samples]))
-    sync.pcm_bytes['phone1'] = signal1
-    sync.pcm_bytes['phone2'] = signal2
-    fft1 = compute_fft(signal1,sync.sample_rate)
-    fft2 = compute_fft(signal2,sync.sample_rate)
-    
-    delay_info = sync.compute_delay(fft1, fft2)
-    print(delay_info)
 
-please check the testing
+
+
+import numpy as np
+
+
+def compute_fft(pcm_bytes, sample_rate: int = 44100):
+    """
+    Convert raw PCM bytes from phone mic into FFT magnitudes + frequencies.
+
+    Args:
+        pcm_bytes   : Raw bytes (float32 LE) from WebSocket stream.
+                      Also accepts np.ndarray directly (for testing).
+        sample_rate : Default 44100 Hz.
+
+    Returns:
+        (magnitudes, freqs) — both np.ndarray of length N//2 + 1
+        None               — if input is too short (< 256 samples)
+    """
+    if isinstance(pcm_bytes, np.ndarray):
+        samples = pcm_bytes.astype(np.float32)
+    else:
+        samples = np.frombuffer(pcm_bytes, dtype=np.float32)
+
+    if len(samples) < 256:
+        return None
+
+    window     = np.hanning(len(samples))
+    fft_result = np.fft.rfft(samples * window)
+    magnitudes = np.abs(fft_result) / len(samples)
+    freqs      = np.fft.rfftfreq(len(samples), d=1.0 / sample_rate)
+    return magnitudes, freqs
+
+
+def find_peak_frequency(magnitudes, freqs, freq_range) -> float:
+    """
+    Find the exact Hz of the loudest frequency within an instrument's range.
+
+    Args:
+        magnitudes : Output from compute_fft
+        freqs      : Output from compute_fft
+        freq_range : Tuple (low_hz, high_hz) from instrument profile
+
+    Returns:
+        float — peak frequency in Hz, rounded to 1 decimal.
+        0.0   — if no bins found in range.
+    """
+    low, high = freq_range
+    mask = (freqs >= low) & (freqs <= high)
+    if not mask.any():
+        return 0.0
+    peak_idx  = np.argmax(magnitudes[mask])
+    peak_freq = float(freqs[mask][peak_idx])
+    return round(peak_freq, 1)
+
+
+def compute_band_energy(magnitudes, freqs, low_hz: float, high_hz: float) -> float:
+    """
+    Calculate the RMS energy in a frequency band, in dBFS.
+
+    Args:
+        magnitudes : Output from compute_fft
+        freqs      : Output from compute_fft
+        low_hz     : Lower bound of band
+        high_hz    : Upper bound of band
+
+    Returns:
+        float — energy in dBFS (always negative for real audio).
+        -100.0 — silence / no bins in range.
+    """
+    mask = (freqs >= low_hz) & (freqs < high_hz)
+    if not mask.any():
+        return -100.0
+    rms = np.sqrt(np.mean(magnitudes[mask] ** 2))
+    db  = 20 * np.log10(rms + 1e-9)
+    return round(float(db), 1)
+
+
+def calculate_q(peak_freq: float, magnitudes, freqs, threshold_db: float = -3) -> float:
+    """
+    Calculate the Q factor for the EQ filter at peak_freq.
+
+    Q = peak_freq / bandwidth
+    bandwidth = span of frequencies within threshold_db of peak magnitude.
+
+    Args:
+        peak_freq     : Center frequency in Hz (from find_peak_frequency)
+        magnitudes    : Output from compute_fft
+        freqs         : Output from compute_fft
+        threshold_db  : How far below peak to measure bandwidth. Default -3 dB.
+
+    Returns:
+        float — Q value clamped to [0.5, 4.0].
+        1.4   — default when bandwidth cannot be measured.
+    """
+    peak_magnitude   = np.max(magnitudes)
+    threshold_linear = peak_magnitude * (10 ** (threshold_db / 20))
+    above_threshold  = freqs[magnitudes >= threshold_linear]
+
+    if len(above_threshold) < 2:
+        return 1.4
+
+    bandwidth = float(above_threshold.max() - above_threshold.min())
+    if bandwidth == 0:
+        return 1.4
+
+    q = peak_freq / bandwidth
+    q = float(np.clip(q, 0.5, 4.0))
+    return round(q, 2)
+
+
+def calculate_snr(magnitudes, freqs, signal_range) -> float:
+    """
+    Signal-to-Noise Ratio — how clean is this phone's audio?
+
+    Signal = energy inside instrument's frequency range.
+    Noise  = everything outside it.
+
+    Used by InstrumentNode.update_utility_score() for beamforming weight.
+
+    Args:
+        magnitudes   : Output from compute_fft
+        freqs        : Output from compute_fft
+        signal_range : Tuple (low_hz, high_hz) — instrument's freq range
+
+    Returns:
+        float — SNR value. Higher = cleaner.
+        999.0 — perfect signal (zero noise, synthetic test only).
+    """
+    low, high    = signal_range
+    signal_mask  = (freqs >= low) & (freqs <= high)
+    noise_mask   = ~signal_mask
+
+    signal_power = np.mean(magnitudes[signal_mask] ** 2)
+    noise_power  = np.mean(magnitudes[noise_mask]  ** 2)
+
+    if noise_power == 0:
+        return 999.0
+
+    snr = signal_power / (noise_power + 1e-9)
+    return round(float(snr), 2)
+
+
+# ----------------------------------------------------------------------
+if __name__ == '__main__':
+    import struct
+
+    sample_rate = 44100
+    N = 4096
+    t = np.linspace(0, N / sample_rate, N)
+    signal = 0.5 * np.sin(2 * np.pi * 284 * t)   # pure 284 Hz tone
+    pcm_bytes = struct.pack(f'{N}f', *signal)
+
+    result = compute_fft(pcm_bytes)
+    assert result is not None, "compute_fft returned None"
+    magnitudes, freqs = result
+    print(f"FFT bins : {len(magnitudes)}, max freq : {freqs[-1]:.0f} Hz")
+
+    peak = find_peak_frequency(magnitudes, freqs, (40, 300))
+    print(f"Peak freq : {peak} Hz")          # expect ~284
+
+    energy = compute_band_energy(magnitudes, freqs, 40, 300)
+    print(f"Band energy : {energy} dBFS")
+
+    q = calculate_q(peak, magnitudes, freqs)
+    print(f"Q value : {q}")
+
+    snr = calculate_snr(magnitudes, freqs, (40, 300))
+    print(f"SNR : {snr}")
+
+    assert abs(peak - 284) < 15, f"Peak {peak} Hz too far from 284 Hz"
+    print("\n✅ All checks passed")

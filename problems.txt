@@ -1,0 +1,3 @@
+1: {problem: in Hive folder ,gcc_phat_sync.py quantitative_analyzer import problem was encountered
+    solution:sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+        from quantitative_analyzer import compute_fft}
