@@ -95,7 +95,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 
 # Expose to phones on same network (or use ngrok)
-ngrok http 8000
+ngrok http 8080
 
 # Frontend (separate terminal)
 cd frontend
