@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from session_manager import SessionManager
+from rag.rag_advisor import RAGAdvisor
 
 # ═══════════════════════════════════════════════════════════════════════════
 # APP INIT
@@ -33,6 +34,7 @@ app.add_middleware(
 )
 
 session_manager = SessionManager()
+rag_advisor = RAGAdvisor()
 
 # session_id → active WebSocket connections
 active_connections: dict[str, set[WebSocket]] = {}
@@ -132,7 +134,17 @@ async def register_member(
         },
     })
 
-    return {"success": True}
+    # RAG: current instrument lineup ke basis pe past sessions se suggestions
+    current_instruments = [n.instrument for n in session_manager.get_all_nodes(session_id)]
+    rag_result = rag_advisor.suggest_for_new_session(current_instruments)
+
+    if rag_result["matches_found"] > 0:
+        await _broadcast(session_id, {
+            "event": "rag_suggestions",
+            "suggestions": rag_result["suggestions"],
+        })
+
+    return {"success": True, "rag_suggestions": rag_result["suggestions"]}
 
 
 @app.delete("/session/{session_id}/member/{phone_id}")
@@ -152,6 +164,31 @@ async def remove_member(session_id: str, phone_id: str):
 
 @app.delete("/session/{session_id}/end")
 async def end_session(session_id: str):
+    # RAG: session khatam hone se PEHLE uska data capture karo, warna
+    # end_session() session object hi delete kar dega.
+    session_info = session_manager.get_session_info(session_id)
+    all_recs = session_manager.get_all_recommendations(session_id)
+
+    if session_info:
+        fixes_applied = []
+        for m in all_recs.get("members", []):
+            eq_rec = m.get("eq_recommendation", {})
+            if eq_rec.get("type") == "multi_notch":
+                for band in eq_rec.get("bands", []):
+                    fixes_applied.append(
+                        f"{m['member_name']} ({m['instrument']}) — "
+                        f"cut {band.get('freq_hz')}Hz {band.get('gain_db')}dB "
+                        f"Q={band.get('q')}"
+                    )
+
+        rag_advisor.log_completed_session(
+            session_id=session_id,
+            band_name=session_info["band_name"],
+            members=session_info["members"],
+            feedback_events=all_recs.get("feedback", []),
+            fixes_applied=fixes_applied,
+        )
+
     success = session_manager.end_session(session_id)
 
     if not success:
@@ -281,4 +318,4 @@ async def _broadcast(session_id: str, message: dict):
 # ═══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8080, reload=True)
